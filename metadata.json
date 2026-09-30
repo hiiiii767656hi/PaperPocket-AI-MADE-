@@ -1,0 +1,6 @@
+{
+  "name": "PaperHost",
+  "description": "Run, customize, and manage PaperMC Minecraft servers directly on your phone with live console, plugin manager, server.properties editor, and live performance telemetry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
