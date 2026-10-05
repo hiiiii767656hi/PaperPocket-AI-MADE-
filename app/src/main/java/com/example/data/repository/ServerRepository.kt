@@ -17,6 +17,7 @@ import com.example.data.remote.ModrinthVersionModel
 import com.example.utils.FileUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.Inet4Address
@@ -205,16 +206,76 @@ class ServerRepository(
         }
     }
 
-    suspend fun saveServer(server: ServerProfileEntity) = withContext(Dispatchers.IO) {
+    suspend fun saveServer(server: ServerProfileEntity): Long = withContext(Dispatchers.IO) {
         if (server.id == 0L) {
-            serverDao.insertServer(server)
+            val insertedId = serverDao.insertServer(server)
+            // Ensure directory exists
+            val dir = server.copy(id = insertedId).getEffectiveDirectory(context)
+            if (!dir.exists()) dir.mkdirs()
+            insertedId
         } else {
             serverDao.updateServer(server)
+            val dir = server.getEffectiveDirectory(context)
+            if (!dir.exists()) dir.mkdirs()
+            server.id
         }
     }
 
+    suspend fun getServerById(serverId: Long): ServerProfileEntity? = withContext(Dispatchers.IO) {
+        serverDao.getServerById(serverId)
+    }
+
+    suspend fun setDefaultServer(id: Long) = withContext(Dispatchers.IO) {
+        serverDao.clearDefaultFlags()
+        serverDao.setDefaultServer(id)
+    }
+
     suspend fun deleteServer(server: ServerProfileEntity) = withContext(Dispatchers.IO) {
+        pluginDao.deleteAllPluginsForServer(server.id)
+        playerDao.deleteAllPlayersForServer(server.id)
+        backupDao.deleteAllBackupsForServer(server.id)
         serverDao.deleteServer(server)
+
+        // Delete server working directory
+        try {
+            val dir = server.getEffectiveDirectory(context)
+            if (dir.exists()) {
+                dir.deleteRecursively()
+            }
+        } catch (_: Exception) {}
+    }
+
+    suspend fun deleteServerById(serverId: Long) = withContext(Dispatchers.IO) {
+        val server = serverDao.getServerById(serverId)
+        if (server != null) {
+            deleteServer(server)
+        } else {
+            pluginDao.deleteAllPluginsForServer(serverId)
+            playerDao.deleteAllPlayersForServer(serverId)
+            backupDao.deleteAllBackupsForServer(serverId)
+            serverDao.deleteServerById(serverId)
+            try {
+                val dir = File(context.filesDir, "servers/$serverId")
+                if (dir.exists()) dir.deleteRecursively()
+            } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun updateServerDirectory(serverId: Long, newDirPath: String?) = withContext(Dispatchers.IO) {
+        serverDao.updateServerDirectory(serverId, newDirPath)
+        val server = serverDao.getServerById(serverId)
+        if (server != null) {
+            val dir = server.getEffectiveDirectory(context)
+            if (!dir.exists()) dir.mkdirs()
+        }
+    }
+
+    suspend fun getPlugins(serverId: Long): List<InstalledPluginEntity> = withContext(Dispatchers.IO) {
+        pluginDao.getPluginsForServer(serverId).first()
+    }
+
+    suspend fun getPlayers(serverId: Long): List<PlayerRecordEntity> = withContext(Dispatchers.IO) {
+        playerDao.getAllPlayers(serverId).first()
     }
 
     suspend fun setPluginEnabled(pluginId: Long, enabled: Boolean) = withContext(Dispatchers.IO) {
@@ -446,11 +507,13 @@ class ServerRepository(
             subDir = "servers/$serverId/bin"
         )
         val server = serverDao.getServerById(serverId) ?: return@withContext null
+        val detectedVersion = fileInfo.fileName?.let { com.example.server.MinecraftProtocolHelper.extractVersionFromFileName(it) }
         val updated = server.copy(
             customJarFileName = fileInfo.fileName,
             customJarUri = fileInfo.localFilePath ?: uri.toString(),
             customJarSizeBytes = fileInfo.sizeBytes,
-            useCustomJar = true
+            useCustomJar = true,
+            minecraftVersion = detectedVersion ?: server.minecraftVersion
         )
         serverDao.updateServer(updated)
         updated
@@ -489,7 +552,8 @@ class ServerRepository(
     }
 
     suspend fun loadServerProperties(serverId: Long): com.example.utils.ServerPropertiesDocument = withContext(Dispatchers.IO) {
-        val serverDir = File(context.filesDir, "servers/$serverId")
+        val profile = serverDao.getServerById(serverId)
+        val serverDir = profile?.getEffectiveDirectory(context) ?: File(context.filesDir, "servers/$serverId")
         val propFile = File(serverDir, "server.properties")
         if (propFile.exists()) {
             try {
@@ -499,7 +563,6 @@ class ServerRepository(
         }
 
         // Fallback to database profile values
-        val profile = serverDao.getServerById(serverId)
         val doc = if (profile != null) {
             com.example.utils.ServerPropertiesDocument.fromProfile(profile)
         } else {
@@ -519,12 +582,12 @@ class ServerRepository(
         serverId: Long,
         properties: com.example.utils.ServerPropertiesDocument
     ): ServerProfileEntity? = withContext(Dispatchers.IO) {
-        val serverDir = File(context.filesDir, "servers/$serverId")
+        val profile = serverDao.getServerById(serverId) ?: return@withContext null
+        val serverDir = profile.getEffectiveDirectory(context)
         if (!serverDir.exists()) serverDir.mkdirs()
         val propFile = File(serverDir, "server.properties")
         propFile.writeText(properties.toPropertiesFileText(), Charsets.UTF_8)
 
-        val profile = serverDao.getServerById(serverId) ?: return@withContext null
         val updated = properties.applyToProfile(profile)
         serverDao.updateServer(updated)
         updated

@@ -30,6 +30,8 @@ data class LivePlayer(
     val x: Double,
     val y: Double,
     val z: Double,
+    val yaw: Float = 0f,
+    val pitch: Float = 0f,
     val dimension: String = "minecraft:overworld",
     val gamemode: String = "SURVIVAL",
     val health: Float = 20f,

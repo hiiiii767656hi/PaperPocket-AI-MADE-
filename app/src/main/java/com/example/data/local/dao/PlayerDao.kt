@@ -37,4 +37,7 @@ interface PlayerDao {
 
     @Query("DELETE FROM player_records WHERE serverId = :serverId AND username = :username")
     suspend fun deleteByName(serverId: Long, username: String)
+
+    @Query("DELETE FROM player_records WHERE serverId = :serverId")
+    suspend fun deleteAllPlayersForServer(serverId: Long)
 }

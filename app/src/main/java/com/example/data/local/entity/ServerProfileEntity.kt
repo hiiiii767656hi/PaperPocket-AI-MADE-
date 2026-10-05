@@ -8,10 +8,10 @@ data class ServerProfileEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val name: String,
-    val minecraftVersion: String = "1.21.1",
+    val minecraftVersion: String = "26.3",
     val paperBuild: Int = 120,
     val port: Int = 25565,
-    val motd: String = "§bPaperCraft §7On-Device Server §a[1.21.1]",
+    val motd: String = "§bPaperCraft §7On-Device Server §a[26.3]",
     val maxPlayers: Int = 20,
     val gamemode: String = "survival",
     val difficulty: String = "normal",
@@ -38,5 +38,17 @@ data class ServerProfileEntity(
     val useCustomJar: Boolean = false,
     val importedFromZip: Boolean = false,
     val originalStartScript: String? = null,
+    val customServerDirectory: String? = null,
     val createdAt: Long = System.currentTimeMillis()
-)
+) {
+    fun getEffectiveDirectory(context: android.content.Context): java.io.File {
+        if (!customServerDirectory.isNullOrBlank()) {
+            val customDir = java.io.File(customServerDirectory)
+            if (!customDir.exists()) customDir.mkdirs()
+            return customDir
+        }
+        val defaultDir = java.io.File(context.filesDir, "servers/$id")
+        if (!defaultDir.exists()) defaultDir.mkdirs()
+        return defaultDir
+    }
+}

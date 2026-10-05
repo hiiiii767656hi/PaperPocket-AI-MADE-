@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,6 +22,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -30,6 +33,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -66,17 +71,21 @@ import com.example.ui.theme.PaperSurfaceElevated
 fun ServerProfileDialog(
     servers: List<ServerProfileEntity>,
     activeServer: ServerProfileEntity?,
+    runningServerId: Long? = null,
     availableVersions: List<String>,
     onSelectServer: (Long) -> Unit,
+    onStartServer: (Long) -> Unit = {},
+    onOpenFiles: (Long) -> Unit = {},
     onCreateServer: (name: String, version: String, port: Int, motd: String, gamemode: String, difficulty: String, ramMb: Int) -> Unit,
     onImportZip: () -> Unit = {},
-    onDeleteServer: () -> Unit,
+    onDeleteServer: (Long) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     var showCreateForm by remember { mutableStateOf(false) }
+    var serverToDelete by remember { mutableStateOf<ServerProfileEntity?>(null) }
 
     var newName by remember { mutableStateOf("New Paper Server") }
-    var newVersion by remember { mutableStateOf(availableVersions.firstOrNull() ?: "1.21.1") }
+    var newVersion by remember { mutableStateOf(availableVersions.firstOrNull() ?: "26.3") }
     var newPort by remember { mutableStateOf("25565") }
     var newRam by remember { mutableStateOf("1024") }
     var newGamemode by remember { mutableStateOf("survival") }
@@ -96,32 +105,32 @@ fun ServerProfileDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    var versionExpanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = versionExpanded,
-                        onExpandedChange = { versionExpanded = it }
+                    OutlinedTextField(
+                        value = newVersion,
+                        onValueChange = { newVersion = it },
+                        label = { Text("Minecraft Version (e.g. 26.3, 1.21.4, 1.20.4)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("create_server_version_input")
+                    )
+
+                    val createVersionChips = remember(availableVersions) {
+                        (listOf("26.3", "1.21.4", "1.21.1", "1.20.4", "1.20.1", "1.19.4", "1.16.5", "1.12.2", "1.8.8") + availableVersions).distinct().take(10)
+                    }
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        OutlinedTextField(
-                            value = "Paper $newVersion",
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("PaperMC Version") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = versionExpanded) },
-                            modifier = Modifier.menuAnchor().fillMaxWidth()
-                        )
-                        ExposedDropdownMenu(
-                            expanded = versionExpanded,
-                            onDismissRequest = { versionExpanded = false }
-                        ) {
-                            availableVersions.take(10).forEach { ver ->
-                                DropdownMenuItem(
-                                    text = { Text("Paper $ver") },
-                                    onClick = {
-                                        newVersion = ver
-                                        versionExpanded = false
-                                    }
+                        items(createVersionChips) { ver ->
+                            FilterChip(
+                                selected = newVersion.equals(ver, ignoreCase = true),
+                                onClick = { newVersion = ver },
+                                label = { Text(ver, fontSize = 11.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = PaperCyan,
+                                    selectedLabelColor = PaperDarkBg
                                 )
-                            }
+                            )
                         }
                     }
 
@@ -185,56 +194,132 @@ fun ServerProfileDialog(
 
                     items(servers, key = { it.id }) { s ->
                         val isSelected = s.id == activeServer?.id
+                        val isRunning = s.id == runningServerId
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
                                 .border(
-                                    width = if (isSelected) 2.dp else 1.dp,
-                                    color = if (isSelected) PaperGreen else PaperSurfaceBorder,
+                                    width = if (isRunning) 2.dp else if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isRunning) PaperGreen else if (isSelected) PaperCyan else PaperSurfaceBorder,
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable {
                                     onSelectServer(s.id)
                                     onDismiss()
                                 },
-                            colors = CardDefaults.cardColors(containerColor = if (isSelected) PaperSurfaceElevated else PaperSurface)
+                            colors = CardDefaults.cardColors(containerColor = if (isRunning || isSelected) PaperSurfaceElevated else PaperSurface)
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.Dns,
-                                        contentDescription = "Server",
-                                        tint = if (isSelected) PaperGreen else PaperCyan
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(s.name, fontWeight = FontWeight.Bold, color = Color.White)
-                                            if (s.importedFromZip) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Box(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(4.dp))
-                                                        .background(PaperPurple.copy(alpha = 0.25f))
-                                                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                ) {
-                                                    Text("ZIP", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = PaperPurple)
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Dns,
+                                            contentDescription = "Server",
+                                            tint = if (isRunning) PaperGreen else if (isSelected) PaperCyan else Color.LightGray
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(s.name, fontWeight = FontWeight.Bold, color = Color.White)
+                                                if (isRunning) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(4.dp))
+                                                            .background(PaperGreen.copy(alpha = 0.25f))
+                                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                                    ) {
+                                                        Text("ONLINE", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = PaperGreen)
+                                                    }
+                                                } else if (isSelected) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(4.dp))
+                                                            .background(PaperCyan.copy(alpha = 0.25f))
+                                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                                    ) {
+                                                        Text("ACTIVE", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = PaperCyan)
+                                                    }
+                                                }
+                                                if (s.importedFromZip) {
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(4.dp))
+                                                            .background(PaperPurple.copy(alpha = 0.25f))
+                                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    ) {
+                                                        Text("ZIP", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = PaperPurple)
+                                                    }
                                                 }
                                             }
+                                            Text("Paper ${s.minecraftVersion} • Port ${s.port} • ${s.allocatedRamMb}MB RAM", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                                         }
-                                        Text("Paper ${s.minecraftVersion} • Port ${s.port} • ${s.allocatedRamMb}MB RAM", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                                     }
-                                }
 
-                                if (isSelected) {
-                                    Icon(Icons.Default.Check, contentDescription = "Active", tint = PaperGreen)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        // Quick Start Server Button
+                                        if (!isRunning) {
+                                            IconButton(
+                                                onClick = {
+                                                    onStartServer(s.id)
+                                                    onDismiss()
+                                                },
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .testTag("start_server_btn_${s.id}")
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.PlayArrow,
+                                                    contentDescription = "Start Server",
+                                                    tint = PaperGreen,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+
+                                        // Quick Files Button
+                                        IconButton(
+                                            onClick = {
+                                                onOpenFiles(s.id)
+                                                onDismiss()
+                                            },
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .testTag("open_files_btn_${s.id}")
+                                        ) {
+                                            Icon(
+                                                Icons.Default.FolderOpen,
+                                                contentDescription = "Server Files",
+                                                tint = PaperPurple,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+
+                                        // Delete Server Button (Always available)
+                                        IconButton(
+                                            onClick = { serverToDelete = s },
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .testTag("delete_server_profile_${s.id}")
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Delete Server",
+                                                tint = PaperRed.copy(alpha = 0.85f),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -283,4 +368,38 @@ fun ServerProfileDialog(
             }
         }
     )
+
+    if (serverToDelete != null) {
+        val target = serverToDelete!!
+        AlertDialog(
+            onDismissRequest = { serverToDelete = null },
+            containerColor = PaperSurface,
+            title = {
+                Text("Delete '${target.name}'?", fontWeight = FontWeight.Bold, color = Color.White)
+            },
+            text = {
+                Text(
+                    "Are you sure you want to delete '${target.name}'? This will permanently delete its configuration, world saves, plugins, and directory files.",
+                    color = Color.LightGray
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val id = target.id
+                        serverToDelete = null
+                        onDeleteServer(id)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PaperRed, contentColor = Color.White)
+                ) {
+                    Text("Delete Server", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { serverToDelete = null }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            }
+        )
+    }
 }

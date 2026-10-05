@@ -3,10 +3,12 @@ package com.example.ui.screens
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,23 +24,44 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lan
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import com.example.server.MinecraftProtocolHelper
+import com.example.server.PlayitTunnelStatus
+import com.example.ui.components.UnknownHostHelpDialog
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -100,12 +123,16 @@ import com.example.utils.FileUtils
 fun ConfigScreen(
     viewModel: MainViewModel,
     onNavigateToProperties: () -> Unit = {},
+    onNavigateToFileManager: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val currentServer by viewModel.currentServer.collectAsStateWithLifecycle()
     val availableVersions by viewModel.paperVersions.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableIntStateOf(0) }
+
+    var showChangeDirDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
     // Editable state mirrors
     var serverName by remember { mutableStateOf("") }
@@ -237,21 +264,28 @@ fun ConfigScreen(
             Tab(
                 selected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
-                text = { Text("Visual Config", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                text = { Text("Visual", fontWeight = FontWeight.Bold, fontSize = 12.sp) },
                 icon = { Icon(Icons.Default.Settings, contentDescription = "Visual", modifier = Modifier.size(18.dp)) },
                 modifier = Modifier.testTag("tab_visual_config")
             )
             Tab(
                 selected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
-                text = { Text("Raw .properties", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                text = { Text("Raw .props", fontWeight = FontWeight.Bold, fontSize = 12.sp) },
                 icon = { Icon(Icons.Default.Code, contentDescription = "Raw", modifier = Modifier.size(18.dp)) },
                 modifier = Modifier.testTag("tab_raw_properties")
             )
             Tab(
                 selected = selectedTab == 2,
                 onClick = { selectedTab = 2 },
-                text = { Text("Termux Runner", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                text = { Text("Playit Tunnel", fontWeight = FontWeight.Bold, fontSize = 12.sp) },
+                icon = { Icon(Icons.Default.Cloud, contentDescription = "Playit", modifier = Modifier.size(18.dp)) },
+                modifier = Modifier.testTag("tab_playit_tunnel")
+            )
+            Tab(
+                selected = selectedTab == 3,
+                onClick = { selectedTab = 3 },
+                text = { Text("Termux", fontWeight = FontWeight.Bold, fontSize = 12.sp) },
                 icon = { Icon(Icons.Default.Terminal, contentDescription = "Termux", modifier = Modifier.size(18.dp)) },
                 modifier = Modifier.testTag("tab_termux_runner")
             )
@@ -322,6 +356,97 @@ fun ConfigScreen(
                         }
                     }
 
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(1.dp, PaperPurple.copy(alpha = 0.7f), RoundedCornerShape(14.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperPurple.copy(alpha = 0.12f))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(42.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(PaperPurple.copy(alpha = 0.25f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.FolderOpen, contentDescription = null, tint = PaperPurple, modifier = Modifier.size(24.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "Server Storage & Files",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 15.sp,
+                                                color = Color.White
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            val isCustom = !currentServer?.customServerDirectory.isNullOrBlank()
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(if (isCustom) PaperPurple.copy(alpha = 0.25f) else PaperGreen.copy(alpha = 0.2f))
+                                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                                            ) {
+                                                Text(if (isCustom) "CUSTOM DIR" else "APP INTERNAL", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = if (isCustom) PaperPurple else PaperGreen)
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = currentServer?.getEffectiveDirectory(context)?.absolutePath ?: "Default storage",
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = Color.LightGray,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = onNavigateToFileManager,
+                                        modifier = Modifier
+                                            .weight(1.2f)
+                                            .height(38.dp)
+                                            .testTag("open_raw_file_manager_button"),
+                                        colors = ButtonDefaults.buttonColors(containerColor = PaperPurple, contentColor = Color.White),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Open File Manager", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = { showChangeDirDialog = true },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(38.dp)
+                                            .testTag("config_change_directory_button"),
+                                        border = BorderStroke(1.dp, PaperPurple),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Folder, contentDescription = null, tint = PaperPurple, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Change Dir", color = PaperPurple, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (currentServer?.importedFromZip == true) {
                         item {
                             ConfigSectionCard(title = "ZIP Server Import Details") {
@@ -384,7 +509,7 @@ fun ConfigScreen(
 
                     item {
                         // Paper Server Build & Engine Selector
-                        ConfigSectionCard(title = "PaperMC Engine & Build Selection") {
+                        ConfigSectionCard(title = "PaperMC Engine & Version Selector") {
                             ConfigSwitchRow(
                                 title = "Use Custom Server Build (.jar)",
                                 subtitle = "Load your own Paper, Purpur, Folia or custom compiled jar from phone storage",
@@ -412,7 +537,7 @@ fun ConfigScreen(
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                                 Icon(
                                                     Icons.Default.CheckCircle,
                                                     contentDescription = "Custom jar",
@@ -426,7 +551,8 @@ fun ConfigScreen(
                                                         fontWeight = FontWeight.Bold,
                                                         fontFamily = FontFamily.Monospace
                                                     ),
-                                                    color = Color.White
+                                                    color = Color.White,
+                                                    maxLines = 1
                                                 )
                                             }
 
@@ -481,53 +607,112 @@ fun ConfigScreen(
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("Select Server .jar from Phone", fontWeight = FontWeight.Bold)
                                 }
-                            } else {
-                                // Official PaperMC API build selector
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Column(modifier = Modifier.weight(1.3f)) {
-                                        Text("PaperMC Version", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        var versionExpanded by remember { mutableStateOf(false) }
-                                        ExposedDropdownMenuBox(
-                                            expanded = versionExpanded,
-                                            onExpandedChange = { versionExpanded = it }
-                                        ) {
-                                            OutlinedTextField(
-                                                value = "Paper $minecraftVersion",
-                                                onValueChange = {},
-                                                readOnly = true,
-                                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = versionExpanded) },
-                                                modifier = Modifier.menuAnchor().fillMaxWidth(),
-                                                colors = outlinedColors()
-                                            )
-                                            ExposedDropdownMenu(
-                                                expanded = versionExpanded,
-                                                onDismissRequest = { versionExpanded = false }
-                                            ) {
-                                                availableVersions.forEach { ver ->
-                                                    DropdownMenuItem(
-                                                        text = { Text("Paper $ver") },
-                                                        onClick = {
-                                                            minecraftVersion = ver
-                                                            versionExpanded = false
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
 
-                                    OutlinedTextField(
-                                        value = paperBuild,
-                                        onValueChange = { paperBuild = it },
-                                        label = { Text("Build #") },
-                                        modifier = Modifier.weight(0.9f),
-                                        colors = outlinedColors()
+                                Spacer(modifier = Modifier.height(14.dp))
+                            }
+
+                            // Version selector (Available in BOTH custom jar and official Paper modes)
+                            Text("Minecraft Version (Custom or Standard)", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = PaperCyan)
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            OutlinedTextField(
+                                value = minecraftVersion,
+                                onValueChange = { minecraftVersion = it },
+                                label = { Text("Version (e.g. 1.21.4, 1.20.4, 26.3, 1.16.5)") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("custom_version_input_field"),
+                                singleLine = true,
+                                colors = outlinedColors()
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Quick suggestion chips
+                            val quickVersions = remember(availableVersions) {
+                                (MinecraftProtocolHelper.POPULAR_VERSIONS + availableVersions).distinct().take(12)
+                            }
+
+                            Text("Quick Version Presets:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            LazyRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(quickVersions) { ver ->
+                                    val isSelected = minecraftVersion.equals(ver, ignoreCase = true)
+                                    FilterChip(
+                                        selected = isSelected,
+                                        onClick = { minecraftVersion = ver },
+                                        label = { Text(ver, fontSize = 11.sp) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PaperCyan,
+                                            selectedLabelColor = PaperDarkBg,
+                                            containerColor = PaperSurfaceElevated,
+                                            labelColor = Color.White
+                                        )
                                     )
                                 }
+                            }
+
+                            if (!useCustomJar) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                OutlinedTextField(
+                                    value = paperBuild,
+                                    onValueChange = { paperBuild = it },
+                                    label = { Text("Paper Build # (e.g. 120)") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    colors = outlinedColors()
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Protocol Status and Multi-Version Indicator
+                            val resolvedProto = MinecraftProtocolHelper.getProtocolForVersion(minecraftVersion)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(PaperGreen.copy(alpha = 0.12f))
+                                    .border(1.dp, PaperGreen.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                                    .padding(10.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = PaperGreen, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            "Version $minecraftVersion • Protocol #$resolvedProto",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = PaperGreen
+                                        )
+                                        Text(
+                                            "Multi-version auto-match active: Minecraft clients will see green ping bars without red 'Incompatible version' warnings.",
+                                            fontSize = 11.sp,
+                                            color = Color.LightGray
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Button(
+                                onClick = { saveChanges() },
+                                colors = ButtonDefaults.buttonColors(containerColor = PaperCyan, contentColor = PaperDarkBg),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .testTag("apply_version_settings_btn")
+                            ) {
+                                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Apply & Save Version Settings", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -800,6 +985,44 @@ fun ConfigScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Save All Settings", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         }
+                    }
+
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperRed.copy(alpha = 0.5f), RoundedCornerShape(14.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperRed.copy(alpha = 0.08f)),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Delete, contentDescription = null, tint = PaperRed, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Danger Zone", fontWeight = FontWeight.Bold, color = PaperRed, fontSize = 14.sp)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "Permanently delete this server profile ('${currentServer?.name ?: "Server"}'), including all worlds, plugin files, configuration, and storage folder.",
+                                    fontSize = 12.sp,
+                                    color = Color.LightGray
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Button(
+                                    onClick = { showDeleteConfirmDialog = true },
+                                    colors = ButtonDefaults.buttonColors(containerColor = PaperRed, contentColor = Color.White),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth().testTag("delete_server_profile_btn")
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Delete Server Profile", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    item {
                         Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
@@ -873,6 +1096,702 @@ fun ConfigScreen(
             }
 
             2 -> {
+                // Playit.gg Tunnel Manager
+                val tunnelInfo by viewModel.playitTunnelInfo.collectAsStateWithLifecycle()
+                val tunnelLogs by viewModel.playitTunnelLogs.collectAsStateWithLifecycle()
+                val deviceIp by viewModel.deviceIp.collectAsStateWithLifecycle()
+                var claimedAddressInput by remember(tunnelInfo.customClaimedDomain) { mutableStateOf(tunnelInfo.customClaimedDomain) }
+                var showUnknownHostHelpDialog by remember { mutableStateOf(false) }
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Item 1: Direct Local IP (Works instantly, never Unknown Host)
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperGreen.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperSurface),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(18.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(PaperGreen.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.Lan, contentDescription = null, tint = PaperGreen, modifier = Modifier.size(20.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("Direct Local Address (Wi-Fi / Hotspot)", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                                        Text("Zero-Configuration • Instant Connection", fontSize = 11.sp, color = PaperGreen)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    "For friends on the same Wi-Fi, hotspot, or local router, use your Direct IP address. Raw IP addresses NEVER fail with 'Unknown Host'!",
+                                    fontSize = 12.sp,
+                                    color = Color.LightGray
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                val localAddr = "$deviceIp:${currentServer?.port ?: 25565}"
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(PaperDarkBg)
+                                        .border(1.dp, PaperSurfaceBorder, RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    SelectionContainer {
+                                        Text(
+                                            text = localAddr,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            color = PaperGreen
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Direct IP Address", localAddr))
+                                            Toast.makeText(context, "Copied $localAddr to clipboard!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = PaperGreen, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Item 2: Unknown Host Diagnostic Banner
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperGold.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperDarkBg),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.HelpOutline, contentDescription = null, tint = PaperGold, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Why does Minecraft report 'Unknown Host'?", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = PaperGold)
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    "Minecraft uses Internet DNS. A fake or unverified domain cannot be resolved by DNS, triggering 'Unknown Host'. To allow friends across the internet to join, you must link a real .joinmc.link address from playit.gg below.",
+                                    fontSize = 12.sp,
+                                    color = Color.LightGray,
+                                    lineHeight = 16.sp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                OutlinedButton(
+                                    onClick = { showUnknownHostHelpDialog = true },
+                                    modifier = Modifier.fillMaxWidth().height(38.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, PaperGold.copy(alpha = 0.6f))
+                                ) {
+                                    Text("Open 'Unknown Host' Fix Guide & Diagnostic Tool", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = PaperGold)
+                                }
+                            }
+                        }
+                    }
+
+                    // Item 3: Playit.gg Tunnel Master Switch
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperCyan.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperSurface),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(18.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(42.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(PaperCyan.copy(alpha = 0.2f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(Icons.Default.Cloud, contentDescription = "Playit.gg", tint = PaperCyan, modifier = Modifier.size(24.dp))
+                                        }
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column {
+                                            Text("Playit.gg Global Tunnel", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                                            Text("Zero-Port-Forward Global Multiplayer", fontSize = 12.sp, color = Color.Gray)
+                                        }
+                                    }
+
+                                    Switch(
+                                        checked = tunnelInfo.isEnabled,
+                                        onCheckedChange = { enable ->
+                                            viewModel.togglePlayitTunnel(enable)
+                                            if (enable) {
+                                                Toast.makeText(context, "Playit.gg tunnel starting...", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        colors = SwitchDefaults.colors(checkedThumbColor = PaperCyan, checkedTrackColor = PaperCyan.copy(alpha = 0.4f)),
+                                        modifier = Modifier.testTag("playit_tunnel_toggle")
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Text(
+                                    "Allows friends across the internet to join your server without opening router ports.",
+                                    fontSize = 12.sp,
+                                    color = Color.LightGray
+                                )
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                val (statusColor, statusText) = when (tunnelInfo.status) {
+                                    PlayitTunnelStatus.ONLINE -> Pair(PaperGreen, "TUNNEL ONLINE (${tunnelInfo.latencyMs}ms)")
+                                    PlayitTunnelStatus.CONNECTING -> Pair(PaperGold, "ESTABLISHING ROUTE...")
+                                    PlayitTunnelStatus.WAITING_FOR_CLAIM -> Pair(PaperGold, "AWAITING CLAIMED DOMAIN")
+                                    PlayitTunnelStatus.OFFLINE -> Pair(Color.Gray, "TUNNEL OFFLINE")
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(statusColor.copy(alpha = 0.12f))
+                                        .border(1.dp, statusColor.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(statusColor)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(statusText, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = statusColor, fontFamily = FontFamily.Monospace)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Item 3.5: Agent Claim Link & Pairing Card
+                    item {
+                        val effectiveClaimUrl = if (tunnelInfo.claimUrl.isNotBlank()) tunnelInfo.claimUrl else if (tunnelInfo.claimCode.isNotBlank()) "https://playit.gg/claim/${tunnelInfo.claimCode}" else "https://playit.gg/claim"
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperPurple.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperSurface),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(18.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(PaperPurple.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.VpnKey, contentDescription = null, tint = PaperPurple, modifier = Modifier.size(20.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("Playit Agent Claim Link", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                                        Text("Link Android server to your Playit.gg account", fontSize = 11.sp, color = PaperPurple)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    "When you start an agent, it generates a unique Claim Link. Visiting this link registers this Android server to your Playit.gg account and provisions your public .joinmc.link address:",
+                                    fontSize = 12.sp,
+                                    color = Color.LightGray,
+                                    lineHeight = 16.sp
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Text("AGENT CLAIM LINK:", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = PaperGreen)
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(PaperDarkBg)
+                                        .border(1.dp, PaperSurfaceBorder, RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    SelectionContainer(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = effectiveClaimUrl,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = PaperGreen
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Playit Claim URL", effectiveClaimUrl))
+                                            Toast.makeText(context, "Copied Claim Link to clipboard!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = PaperGreen, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+
+                                if (tunnelInfo.claimCode.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Claim Code: ", fontSize = 12.sp, color = Color.Gray)
+                                        Text(tunnelInfo.claimCode, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = PaperCyan)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        IconButton(
+                                            onClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                clipboard.setPrimaryClip(ClipData.newPlainText("Playit Claim Code", tunnelInfo.claimCode))
+                                                Toast.makeText(context, "Copied claim code ${tunnelInfo.claimCode}!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy Code", tint = PaperCyan, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                }
+
+                                if (tunnelInfo.claimStatusMessage.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), color = PaperGold, strokeWidth = 1.5.dp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(tunnelInfo.claimStatusMessage, fontSize = 11.sp, color = PaperGold)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(effectiveClaimUrl))
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Could not open browser: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = PaperGreen, contentColor = PaperDarkBg),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.weight(1f).height(40.dp)
+                                    ) {
+                                        Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Open Claim Link", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = { viewModel.generateNewPlayitClaimLink() },
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f)),
+                                        modifier = Modifier.height(40.dp)
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = "New Code", modifier = Modifier.size(16.dp), tint = Color.LightGray)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("New Code", fontSize = 11.sp, color = Color.LightGray)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // Fix for 'Version is too old (v0.0.0)' or 'Tunnel not supported'
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(PaperPurple.copy(alpha = 0.12f))
+                                        .border(1.dp, PaperPurple.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                        .padding(12.dp)
+                                ) {
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Info, contentDescription = null, tint = PaperPurple, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Fix 'Version Too Old (v0.0.0)' / 'Tunnel Not Supported'", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "If playit.gg reported 'Tunnel not supported: version is too old (v0.0.0)', it was caused by the legacy self-managed flag. The app now registers as modern Assignable Agent (Protocol v1.1.0) and automatically provisions your Minecraft Java tunnel via API upon acceptance!",
+                                            fontSize = 11.sp,
+                                            color = Color.LightGray,
+                                            lineHeight = 15.sp
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Button(
+                                            onClick = {
+                                                viewModel.fixPlayitVersionTooOld()
+                                                Toast.makeText(context, "Generated modern v1.1.0 Assignable agent link!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = PaperPurple, contentColor = Color.White),
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier.fillMaxWidth().height(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Fix & Regenerate Modern v1.1.0 Agent", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Item 4: Configured Address & DNS Checker
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperSurfaceBorder, RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperSurface),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(18.dp)) {
+                                Text("Configure Playit Address", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Enter the assigned .joinmc.link address from your Playit dashboard:", fontSize = 12.sp, color = Color.Gray)
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                OutlinedTextField(
+                                    value = claimedAddressInput,
+                                    onValueChange = { claimedAddressInput = it },
+                                    placeholder = { Text("e.g. stone-deer.gl.joinmc.link", fontSize = 13.sp, color = Color.Gray) },
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = PaperCyan,
+                                        unfocusedBorderColor = PaperSurfaceBorder,
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            viewModel.updatePlayitPublicAddress(claimedAddressInput.trim())
+                                            Toast.makeText(context, "Playit address saved & DNS tested!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = PaperCyan, contentColor = PaperDarkBg),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.weight(1f).height(40.dp)
+                                    ) {
+                                        Text("Save & Validate DNS", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            try {
+                                                val effectiveClaimUrl = if (tunnelInfo.claimUrl.isNotBlank()) tunnelInfo.claimUrl else "https://playit.gg/claim"
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(effectiveClaimUrl))
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Could not open browser", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, PaperGreen.copy(alpha = 0.6f)),
+                                        modifier = Modifier.height(40.dp)
+                                    ) {
+                                        Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = PaperGreen, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Open Claim Link", fontSize = 12.sp, color = PaperGreen)
+                                    }
+                                }
+
+                                // Live DNS feedback box
+                                tunnelInfo.lastResolutionResult?.let { res ->
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (res.isResolvable) PaperGreen.copy(alpha = 0.15f) else PaperRed.copy(alpha = 0.15f))
+                                            .border(1.dp, if (res.isResolvable) PaperGreen.copy(alpha = 0.4f) else PaperRed.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                            .padding(10.dp)
+                                    ) {
+                                        Text(
+                                            text = res.message,
+                                            fontSize = 11.sp,
+                                            color = if (res.isResolvable) PaperGreen else Color(0xFFFF8A80),
+                                            lineHeight = 16.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Item 5: Active Public Address Display
+                    if (tunnelInfo.isEnabled && tunnelInfo.publicAddress.isNotBlank()) {
+                        item {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, PaperGreen.copy(alpha = 0.6f), RoundedCornerShape(16.dp)),
+                                colors = CardDefaults.cardColors(containerColor = PaperSurface),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(18.dp)) {
+                                    Text("Active Public Address For Friends", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = PaperGreen)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Share this address with anyone on PC (Java Edition) or mobile (Bedrock) to join:", fontSize = 12.sp, color = Color.LightGray)
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(PaperDarkBg)
+                                            .border(1.dp, PaperSurfaceBorder, RoundedCornerShape(10.dp))
+                                            .padding(14.dp)
+                                    ) {
+                                        SelectionContainer {
+                                            Text(
+                                                text = tunnelInfo.publicAddress,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 15.sp,
+                                                color = PaperGreen
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                clipboard.setPrimaryClip(ClipData.newPlainText("Minecraft Address", tunnelInfo.publicAddress))
+                                                Toast.makeText(context, "Copied ${tunnelInfo.publicAddress}!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.weight(1f).height(44.dp).testTag("copy_playit_address_button"),
+                                            colors = ButtonDefaults.buttonColors(containerColor = PaperGreen, contentColor = PaperDarkBg),
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Copy Address", fontWeight = FontWeight.Bold)
+                                        }
+
+                                        FilledTonalButton(
+                                            onClick = {
+                                                val sendIntent = Intent().apply {
+                                                    action = Intent.ACTION_SEND
+                                                    putExtra(Intent.EXTRA_TEXT, "Join my Minecraft Paper server! Address: ${tunnelInfo.publicAddress}")
+                                                    type = "text/plain"
+                                                }
+                                                context.startActivity(Intent.createChooser(sendIntent, "Share Server Address"))
+                                            },
+                                            modifier = Modifier.weight(1f).height(44.dp),
+                                            colors = ButtonDefaults.filledTonalButtonColors(containerColor = PaperCyan.copy(alpha = 0.2f), contentColor = PaperCyan),
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Icon(Icons.Default.Share, contentDescription = "Share")
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Share", fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperSurfaceBorder, RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperSurface),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(18.dp)) {
+                                Text("Playit Plugin (1-Click Auto Install)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Installs official 'playit-spigot.jar' into server's plugins folder. Paper will launch the tunnel natively on boot!", fontSize = 12.sp, color = Color.LightGray)
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Button(
+                                    onClick = {
+                                        viewModel.installPlayitPlugin { success ->
+                                            if (success) {
+                                                Toast.makeText(context, "playit-spigot.jar installed into plugins/!", Toast.LENGTH_LONG).show()
+                                            } else {
+                                                Toast.makeText(context, "Could not install plugin", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = PaperPurple, contentColor = Color.White),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.fillMaxWidth().height(44.dp).testTag("install_playit_plugin_btn")
+                                ) {
+                                    Icon(Icons.Default.CloudDone, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Install Playit Plugin to Server", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperSurfaceBorder, RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperSurface),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(18.dp)) {
+                                Text("Tunnel Live Activity Logs", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = PaperCyan)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(130.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(PaperDarkBg)
+                                        .padding(10.dp)
+                                ) {
+                                    LazyColumn {
+                                        if (tunnelLogs.isEmpty()) {
+                                            item {
+                                                Text("Tunnel standby. Enable Playit.gg above to start routing.", color = Color.Gray, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                            }
+                                        } else {
+                                            items(tunnelLogs) { logLine ->
+                                                Text(logLine, color = PaperGreen, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, PaperSurfaceBorder, RoundedCornerShape(16.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PaperSurface),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(18.dp)) {
+                                Text("Termux Playit Agent CLI", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("If running your Paper server in Termux, install the official playit binary:", fontSize = 12.sp, color = Color.LightGray)
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                val playitCmd = "pkg install -y playit && playit"
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(PaperDarkBg)
+                                        .padding(12.dp)
+                                ) {
+                                    Text(playitCmd, fontFamily = FontFamily.Monospace, color = PaperCyan, fontSize = 12.sp)
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                OutlinedButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        clipboard.setPrimaryClip(ClipData.newPlainText("Playit Command", playitCmd))
+                                        Toast.makeText(context, "Copied playit command to clipboard!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = PaperCyan),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Copy Termux Playit Command", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
+                }
+
+                if (showUnknownHostHelpDialog) {
+                    UnknownHostHelpDialog(
+                        deviceIp = deviceIp,
+                        serverPort = currentServer?.port ?: 25565,
+                        currentPlayitAddress = tunnelInfo.publicAddress,
+                        claimUrl = tunnelInfo.claimUrl,
+                        claimCode = tunnelInfo.claimCode,
+                        onSavePlayitAddress = {
+                            viewModel.updatePlayitPublicAddress(it)
+                            claimedAddressInput = it
+                        },
+                        onRefreshClaimCode = { viewModel.generateNewPlayitClaimLink() },
+                        onDismiss = { showUnknownHostHelpDialog = false }
+                    )
+                }
+            }
+
+            3 -> {
                 // Termux Native Runner Helper
                 val termuxScript = remember(currentServer) {
                     viewModel.getTermuxScript()
@@ -894,13 +1813,13 @@ fun ConfigScreen(
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(
-                                    text = "Run via Termux (Native OpenJDK 21)",
+                                    text = "Run via Termux (Optional External OpenJDK 21)",
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                     color = PaperCyan
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "For power users who want to run the full official PaperMC .jar with Java 21 directly on this Android device, PaperCraft generates the complete self-installing launch script.",
+                                    text = "The in-app server launched from the Dashboard is already fully active and playable with real 3D blocks! This Termux script is strictly optional for advanced power users who want to run external desktop PaperMC builds with heavy Spigot plugins.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color.LightGray
                                 )
@@ -954,6 +1873,123 @@ fun ConfigScreen(
                 }
             }
         }
+    }
+
+    if (showChangeDirDialog) {
+        val rootDir = currentServer?.getEffectiveDirectory(context) ?: java.io.File(context.filesDir, "servers/1")
+        var dirInput by remember { mutableStateOf(rootDir.absolutePath) }
+        val defaultPath = remember(currentServer) {
+            java.io.File(context.filesDir, "servers/${currentServer?.id ?: 1}").absolutePath
+        }
+        val documentsPath = remember(currentServer) {
+            "/storage/emulated/0/Documents/PaperServer_${currentServer?.name?.replace(" ", "_") ?: "1"}"
+        }
+
+        AlertDialog(
+            onDismissRequest = { showChangeDirDialog = false },
+            containerColor = PaperSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, tint = PaperPurple)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Change Server Directory", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Set the folder where this server's worlds, plugins, and configuration files live on your device.",
+                        color = Color.LightGray,
+                        fontSize = 12.sp
+                    )
+
+                    OutlinedTextField(
+                        value = dirInput,
+                        onValueChange = { dirInput = it },
+                        label = { Text("Server Directory Path") },
+                        singleLine = false,
+                        maxLines = 3,
+                        modifier = Modifier.fillMaxWidth().testTag("config_dir_input"),
+                        colors = outlinedColors()
+                    )
+
+                    Text("Quick Location Presets:", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color.Gray)
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = dirInput == defaultPath,
+                            onClick = { dirInput = defaultPath },
+                            label = { Text("App Internal", fontSize = 11.sp) }
+                        )
+                        FilterChip(
+                            selected = dirInput == documentsPath,
+                            onClick = { dirInput = documentsPath },
+                            label = { Text("Documents Folder", fontSize = 11.sp) }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val path = dirInput.trim()
+                        if (path.isNotBlank()) {
+                            viewModel.updateServerDirectory(path)
+                            showChangeDirDialog = false
+                            Toast.makeText(context, "Server directory updated to: $path", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PaperPurple, contentColor = Color.White),
+                    modifier = Modifier.testTag("apply_config_dir_button")
+                ) {
+                    Text("Apply & Set Directory", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showChangeDirDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            }
+        )
+    }
+
+    if (showDeleteConfirmDialog) {
+        val server = currentServer
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            containerColor = PaperSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Delete, contentDescription = null, tint = PaperRed)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Delete '${server?.name}'?", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            },
+            text = {
+                Text(
+                    "Are you sure you want to permanently delete '${server?.name}'? This will delete all configuration, worlds, plugins, and directory files.",
+                    color = Color.LightGray
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirmDialog = false
+                        viewModel.deleteCurrentServer()
+                        Toast.makeText(context, "Server profile deleted.", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PaperRed, contentColor = Color.White),
+                    modifier = Modifier.testTag("confirm_delete_server_btn")
+                ) {
+                    Text("Delete Server", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            }
+        )
     }
 }
 

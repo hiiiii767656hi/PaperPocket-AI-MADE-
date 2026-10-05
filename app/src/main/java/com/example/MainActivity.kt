@@ -36,8 +36,10 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -76,8 +78,10 @@ import com.example.ui.components.ServerProfileDialog
 import com.example.ui.screens.ConfigScreen
 import com.example.ui.screens.ConsoleScreen
 import com.example.ui.screens.DashboardScreen
+import com.example.ui.screens.FileManagerScreen
 import com.example.ui.screens.PlayersScreen
 import com.example.ui.screens.PluginsScreen
+import com.example.ui.screens.PojavClientScreen
 import com.example.ui.screens.ServerPropertiesScreen
 import com.example.ui.screens.WorldsScreen
 import com.example.ui.theme.MyApplicationTheme
@@ -97,7 +101,9 @@ enum class AppDestination(val title: String) {
     PLUGINS("Plugins"),
     PLAYERS("Players"),
     WORLDS("Worlds & Backups"),
-    SERVER_PROPERTIES("server.properties")
+    SERVER_PROPERTIES("server.properties"),
+    FILE_MANAGER("File Manager"),
+    POJAV_CLIENT("Pojav 1.21.1 Client")
 }
 
 class MainActivity : ComponentActivity() {
@@ -126,6 +132,7 @@ fun MainAppScreen(viewModel: MainViewModel) {
     val currentServer by viewModel.currentServer.collectAsStateWithLifecycle()
     val allServers by viewModel.allServers.collectAsStateWithLifecycle()
     val serverStatus by viewModel.serverStatus.collectAsStateWithLifecycle()
+    val runningServerId by viewModel.runningServerId.collectAsStateWithLifecycle()
     val paperVersions by viewModel.paperVersions.collectAsStateWithLifecycle()
 
     // ZIP Server Import States
@@ -164,7 +171,10 @@ fun MainAppScreen(viewModel: MainViewModel) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
-            if (currentDestination != AppDestination.SERVER_PROPERTIES) {
+            if (currentDestination != AppDestination.SERVER_PROPERTIES &&
+                currentDestination != AppDestination.FILE_MANAGER &&
+                currentDestination != AppDestination.POJAV_CLIENT
+            ) {
                 CenterAlignedTopAppBar(
                     title = {
                         // Server profile switcher chip in top app bar
@@ -206,6 +216,26 @@ fun MainAppScreen(viewModel: MainViewModel) {
                     },
                     actions = {
                         IconButton(
+                            onClick = { currentDestination = AppDestination.POJAV_CLIENT },
+                            modifier = Modifier.testTag("pojav_client_nav_button")
+                        ) {
+                            Icon(
+                                Icons.Default.SportsEsports,
+                                contentDescription = "Pojav 1.21.1 Test Client",
+                                tint = if (currentDestination == AppDestination.POJAV_CLIENT) PaperCyan else PaperGreen
+                            )
+                        }
+                        IconButton(
+                            onClick = { currentDestination = AppDestination.FILE_MANAGER },
+                            modifier = Modifier.testTag("file_manager_nav_button")
+                        ) {
+                            Icon(
+                                Icons.Default.FolderOpen,
+                                contentDescription = "Raw File Manager",
+                                tint = if (currentDestination == AppDestination.FILE_MANAGER) PaperCyan else Color.LightGray
+                            )
+                        }
+                        IconButton(
                             onClick = { currentDestination = AppDestination.WORLDS },
                             modifier = Modifier.testTag("worlds_nav_button")
                         ) {
@@ -224,37 +254,39 @@ fun MainAppScreen(viewModel: MainViewModel) {
             }
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = PaperSurface,
-                tonalElevation = 8.dp,
-                modifier = Modifier
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .testTag("bottom_navigation_bar")
-            ) {
-                val navItems = listOf(
-                    Triple(AppDestination.DASHBOARD, Icons.Default.Dashboard, "Home"),
-                    Triple(AppDestination.CONSOLE, Icons.Default.Terminal, "Console"),
-                    Triple(AppDestination.CONFIG, Icons.Default.Tune, "Config"),
-                    Triple(AppDestination.PLUGINS, Icons.Default.Extension, "Plugins"),
-                    Triple(AppDestination.PLAYERS, Icons.Default.People, "Players")
-                )
-
-                navItems.forEach { (dest, icon, label) ->
-                    val isSelected = currentDestination == dest || (dest == AppDestination.CONFIG && currentDestination == AppDestination.SERVER_PROPERTIES)
-                    NavigationBarItem(
-                        selected = isSelected,
-                        onClick = { currentDestination = dest },
-                        icon = { Icon(icon, contentDescription = label) },
-                        label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = PaperDarkBg,
-                            selectedTextColor = PaperCyan,
-                            indicatorColor = PaperCyan,
-                            unselectedIconColor = Color(0xFF78909C),
-                            unselectedTextColor = Color(0xFF78909C)
-                        ),
-                        modifier = Modifier.testTag("nav_item_${label.lowercase()}")
+            if (currentDestination != AppDestination.POJAV_CLIENT) {
+                NavigationBar(
+                    containerColor = PaperSurface,
+                    tonalElevation = 8.dp,
+                    modifier = Modifier
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .testTag("bottom_navigation_bar")
+                ) {
+                    val navItems = listOf(
+                        Triple(AppDestination.DASHBOARD, Icons.Default.Dashboard, "Home"),
+                        Triple(AppDestination.CONSOLE, Icons.Default.Terminal, "Console"),
+                        Triple(AppDestination.CONFIG, Icons.Default.Tune, "Config"),
+                        Triple(AppDestination.PLUGINS, Icons.Default.Extension, "Plugins"),
+                        Triple(AppDestination.PLAYERS, Icons.Default.People, "Players")
                     )
+
+                    navItems.forEach { (dest, icon, label) ->
+                        val isSelected = currentDestination == dest || (dest == AppDestination.CONFIG && (currentDestination == AppDestination.SERVER_PROPERTIES || currentDestination == AppDestination.FILE_MANAGER))
+                        NavigationBarItem(
+                            selected = isSelected,
+                            onClick = { currentDestination = dest },
+                            icon = { Icon(icon, contentDescription = label) },
+                            label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = PaperDarkBg,
+                                selectedTextColor = PaperCyan,
+                                indicatorColor = PaperCyan,
+                                unselectedIconColor = Color(0xFF78909C),
+                                unselectedTextColor = Color(0xFF78909C)
+                            ),
+                            modifier = Modifier.testTag("nav_item_${label.lowercase()}")
+                        )
+                    }
                 }
             }
         }
@@ -262,7 +294,7 @@ fun MainAppScreen(viewModel: MainViewModel) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(if (currentDestination == AppDestination.POJAV_CLIENT) androidx.compose.foundation.layout.PaddingValues(0.dp) else innerPadding)
                 .background(PaperDarkBg)
         ) {
             AnimatedContent(
@@ -273,12 +305,16 @@ fun MainAppScreen(viewModel: MainViewModel) {
                 when (dest) {
                     AppDestination.DASHBOARD -> DashboardScreen(
                         viewModel = viewModel,
-                        onNavigateToConsole = { currentDestination = AppDestination.CONSOLE }
+                        onNavigateToConsole = { currentDestination = AppDestination.CONSOLE },
+                        onNavigateToFiles = { currentDestination = AppDestination.FILE_MANAGER },
+                        onNavigateToProperties = { currentDestination = AppDestination.SERVER_PROPERTIES },
+                        onNavigateToPojav = { currentDestination = AppDestination.POJAV_CLIENT }
                     )
                     AppDestination.CONSOLE -> ConsoleScreen(viewModel = viewModel)
                     AppDestination.CONFIG -> ConfigScreen(
                         viewModel = viewModel,
-                        onNavigateToProperties = { currentDestination = AppDestination.SERVER_PROPERTIES }
+                        onNavigateToProperties = { currentDestination = AppDestination.SERVER_PROPERTIES },
+                        onNavigateToFileManager = { currentDestination = AppDestination.FILE_MANAGER }
                     )
                     AppDestination.PLUGINS -> PluginsScreen(viewModel = viewModel)
                     AppDestination.PLAYERS -> PlayersScreen(viewModel = viewModel)
@@ -286,6 +322,14 @@ fun MainAppScreen(viewModel: MainViewModel) {
                     AppDestination.SERVER_PROPERTIES -> ServerPropertiesScreen(
                         viewModel = viewModel,
                         onNavigateBack = { currentDestination = AppDestination.CONFIG }
+                    )
+                    AppDestination.FILE_MANAGER -> FileManagerScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { currentDestination = AppDestination.CONFIG }
+                    )
+                    AppDestination.POJAV_CLIENT -> PojavClientScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { currentDestination = AppDestination.DASHBOARD }
                     )
                 }
             }
@@ -296,15 +340,25 @@ fun MainAppScreen(viewModel: MainViewModel) {
         ServerProfileDialog(
             servers = allServers,
             activeServer = currentServer,
+            runningServerId = runningServerId,
             availableVersions = paperVersions,
             onSelectServer = { viewModel.selectServer(it) },
+            onStartServer = { serverId ->
+                viewModel.startServer(serverId)
+            },
+            onOpenFiles = { serverId ->
+                viewModel.selectServer(serverId)
+                currentDestination = AppDestination.FILE_MANAGER
+            },
             onCreateServer = { name, version, port, motd, gm, diff, ram ->
                 viewModel.createServerProfile(name, version, port, motd, gm, diff, ram)
             },
             onImportZip = {
                 zipPickerLauncher.launch("*/*")
             },
-            onDeleteServer = { viewModel.deleteCurrentServer() },
+            onDeleteServer = { serverId ->
+                viewModel.deleteServer(serverId)
+            },
             onDismiss = { showProfileDialog = false }
         )
     }

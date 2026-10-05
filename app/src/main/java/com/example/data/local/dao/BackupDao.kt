@@ -21,4 +21,7 @@ interface BackupDao {
 
     @Query("DELETE FROM server_backups WHERE id = :id")
     suspend fun deleteBackupById(id: Long)
+
+    @Query("DELETE FROM server_backups WHERE serverId = :serverId")
+    suspend fun deleteAllBackupsForServer(serverId: Long)
 }

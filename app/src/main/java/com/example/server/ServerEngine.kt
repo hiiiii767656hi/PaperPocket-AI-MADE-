@@ -44,6 +44,12 @@ class ServerEngine(private val context: Context) {
     private val _onlinePlayers = MutableStateFlow<List<LivePlayer>>(emptyList())
     val onlinePlayers: StateFlow<List<LivePlayer>> = _onlinePlayers.asStateFlow()
 
+    private val _runningServerId = MutableStateFlow<Long?>(null)
+    val runningServerId: StateFlow<Long?> = _runningServerId.asStateFlow()
+
+    private val _runningServer = MutableStateFlow<ServerProfileEntity?>(null)
+    val runningServer: StateFlow<ServerProfileEntity?> = _runningServer.asStateFlow()
+
     private var serverSocket: ServerSocket? = null
     private var socketListenerJob: Job? = null
     private var tickLoopJob: Job? = null
@@ -52,6 +58,7 @@ class ServerEngine(private val context: Context) {
     private var currentProfile: ServerProfileEntity? = null
     private val activePlugins = CopyOnWriteArrayList<InstalledPluginEntity>()
     private val knownPlayers = CopyOnWriteArrayList<PlayerRecordEntity>()
+    private val activeSessions = CopyOnWriteArrayList<RealMinecraftServerSession>()
 
     private var startTimeMillis = 0L
     private var worldTimeTicks = 1000L
@@ -65,6 +72,8 @@ class ServerEngine(private val context: Context) {
         if (_status.value != ServerStatus.STOPPED) return
 
         currentProfile = profile
+        _runningServerId.value = profile.id
+        _runningServer.value = profile
         activePlugins.clear()
         activePlugins.addAll(plugins.filter { it.isEnabled })
         knownPlayers.clear()
@@ -74,6 +83,9 @@ class ServerEngine(private val context: Context) {
         startTimeMillis = System.currentTimeMillis()
 
         scope.launch {
+            val workingDir = profile.getEffectiveDirectory(context)
+            logInfo("[PaperHost] Starting server profile: \"${profile.name}\" (ID #${profile.id})")
+            logInfo("[PaperHost] Working directory: ${workingDir.absolutePath}")
             if (profile.useCustomJar && !profile.customJarFileName.isNullOrBlank()) {
                 logInfo("Starting PaperMC server with CUSTOM BUILD: ${profile.customJarFileName}")
             } else {
@@ -150,15 +162,24 @@ class ServerEngine(private val context: Context) {
     private fun bindServerSocket(preferredPort: Int): Int {
         var portToUse = preferredPort
         try {
-            serverSocket = ServerSocket(portToUse)
+            val socket = ServerSocket()
+            socket.reuseAddress = true
+            socket.bind(java.net.InetSocketAddress(portToUse))
+            serverSocket = socket
         } catch (e: Exception) {
             Log.w("ServerEngine", "Preferred port $portToUse busy or restricted: ${e.message}. Trying 25566...")
             try {
                 portToUse = 25566
-                serverSocket = ServerSocket(portToUse)
+                val socket = ServerSocket()
+                socket.reuseAddress = true
+                socket.bind(java.net.InetSocketAddress(portToUse))
+                serverSocket = socket
             } catch (e2: Exception) {
                 portToUse = 25567
-                serverSocket = ServerSocket(portToUse)
+                val socket = ServerSocket()
+                socket.reuseAddress = true
+                socket.bind(java.net.InetSocketAddress(portToUse))
+                serverSocket = socket
             }
         }
 
@@ -170,11 +191,26 @@ class ServerEngine(private val context: Context) {
                     val sampleNames = _onlinePlayers.value.map { it.name }
                     scope.launch(Dispatchers.IO) {
                         try {
+                            val displayVersion = if (profile.useCustomJar && !profile.customJarFileName.isNullOrBlank()) {
+                                profile.minecraftVersion.ifBlank { "Custom" }
+                            } else {
+                                profile.minecraftVersion
+                            }
+                            val resolvedVersionName = if (displayVersion.startsWith("Paper", ignoreCase = true)) {
+                                displayVersion
+                            } else {
+                                "Paper $displayVersion"
+                            }
+                            val protocol = MinecraftProtocolHelper.getProtocolForVersion(profile.minecraftVersion)
+
                             MinecraftSlpHandler.handleClient(
                                 socket = client,
+                                engine = this@ServerEngine,
+                                profile = profile,
                                 serverName = profile.name,
-                                versionName = "Paper ${profile.minecraftVersion}",
-                                protocolVersion = 767,
+                                versionName = resolvedVersionName,
+                                protocolVersion = protocol,
+                                autoMatchClientProtocol = true,
                                 motd = profile.motd,
                                 onlinePlayers = _onlinePlayers.value.size,
                                 maxPlayers = profile.maxPlayers,
@@ -192,6 +228,163 @@ class ServerEngine(private val context: Context) {
             }
         }
         return portToUse
+    }
+
+    fun registerClientSession(session: RealMinecraftServerSession) {
+        activeSessions.add(session)
+        val newPlayer = LivePlayer(
+            name = session.playerName,
+            uuid = session.playerUuid.toString(),
+            pingMs = session.clientPingMs,
+            x = session.posX,
+            y = session.posY,
+            z = session.posZ,
+            yaw = session.yaw,
+            pitch = session.pitch,
+            dimension = "minecraft:overworld",
+            gamemode = if (session.isCreative) "CREATIVE" else "SURVIVAL",
+            health = 20f,
+            food = 20,
+            isOp = true
+        )
+        val list = _onlinePlayers.value.toMutableList()
+        list.removeAll { it.name.equals(session.playerName, ignoreCase = true) }
+        list.add(newPlayer)
+        _onlinePlayers.value = list
+        _metrics.value = _metrics.value.copy(onlinePlayers = list.size)
+
+        logInfo("UUID of player ${session.playerName} is ${session.playerUuid}")
+        logInfo("${session.playerName} logged in with entity id ${session.entityId} at ([world]${session.posX}, ${session.posY}, ${session.posZ})")
+        logInfo("[Server] §a[+] ${session.playerName} joined the game")
+    }
+
+    fun unregisterClientSession(session: RealMinecraftServerSession) {
+        activeSessions.remove(session)
+        val list = _onlinePlayers.value.toMutableList()
+        list.removeAll { it.name.equals(session.playerName, ignoreCase = true) }
+        _onlinePlayers.value = list
+        _metrics.value = _metrics.value.copy(onlinePlayers = list.size)
+        logInfo("[Server] §c[-] ${session.playerName} left the game")
+    }
+
+    private var pojavListener: PojavSessionListener? = null
+
+    fun registerPojavSession(
+        name: String,
+        initialX: Double = 0.5,
+        initialY: Double = 65.0,
+        initialZ: Double = 0.5,
+        listener: PojavSessionListener
+    ) {
+        pojavListener = listener
+        val uuid = UUID.nameUUIDFromBytes("PojavPlayer:$name".toByteArray(Charsets.UTF_8))
+        val newPlayer = LivePlayer(
+            name = name,
+            uuid = uuid.toString(),
+            pingMs = Random.nextInt(12, 28),
+            x = initialX,
+            y = initialY,
+            z = initialZ,
+            yaw = 0f,
+            pitch = 0f,
+            dimension = "minecraft:overworld",
+            gamemode = currentProfile?.gamemode?.uppercase(Locale.ROOT) ?: "SURVIVAL",
+            health = 20f,
+            food = 20,
+            isOp = true
+        )
+        val list = _onlinePlayers.value.toMutableList()
+        list.removeAll { it.name.equals(name, ignoreCase = true) }
+        list.add(newPlayer)
+        _onlinePlayers.value = list
+        _metrics.value = _metrics.value.copy(onlinePlayers = list.size)
+
+        logInfo("UUID of player $name is $uuid")
+        logInfo("$name[pojav-core/127.0.0.1:25565] logged in with entity id 777 at ([world]$initialX, $initialY, $initialZ)")
+        logInfo("[Server] §a[+] $name joined the game (via Pojav Core 1.21.1)")
+        broadcastMessage("§e$name joined the game")
+    }
+
+    fun unregisterPojavSession(name: String) {
+        pojavListener = null
+        val list = _onlinePlayers.value.toMutableList()
+        list.removeAll { it.name.equals(name, ignoreCase = true) }
+        _onlinePlayers.value = list
+        _metrics.value = _metrics.value.copy(onlinePlayers = list.size)
+        logInfo("[Server] §c[-] $name left the game")
+        broadcastMessage("§e$name left the game")
+    }
+
+    fun broadcastPlayerChat(playerName: String, message: String) {
+        logInfo("[Server] <$playerName> $message")
+        val formatted = "<$playerName> $message"
+        for (session in activeSessions) {
+            session.sendSystemChatMessage(formatted)
+        }
+        pojavListener?.onServerMessage(formatted)
+    }
+
+    fun broadcastMessage(message: String) {
+        logInfo(message)
+        for (session in activeSessions) {
+            session.sendSystemChatMessage(message)
+        }
+        pojavListener?.onServerMessage(message)
+    }
+
+    fun logPlayerCommand(playerName: String, cmd: String) {
+        logInfo("$playerName issued server command: /$cmd")
+    }
+
+    fun updatePlayerPosition(playerName: String, x: Double, y: Double, z: Double, yaw: Float, pitch: Float) {
+        _onlinePlayers.value = _onlinePlayers.value.map { p ->
+            if (p.name.equals(playerName, ignoreCase = true)) {
+                p.copy(x = x, y = y, z = z, yaw = yaw, pitch = pitch)
+            } else {
+                p
+            }
+        }
+    }
+
+    fun updatePlayerPing(playerName: String, pingMs: Int) {
+        _onlinePlayers.value = _onlinePlayers.value.map { p ->
+            if (p.name.equals(playerName, ignoreCase = true)) {
+                p.copy(pingMs = pingMs)
+            } else {
+                p
+            }
+        }
+    }
+
+    private fun handlePlayerJoined(playerName: String, ip: String) {
+        scope.launch {
+            val entityId = Random.nextInt(200, 999)
+            val uuid = java.util.UUID.nameUUIDFromBytes("OfflinePlayer:$playerName".toByteArray(Charsets.UTF_8))
+            logInfo("UUID of player $playerName is $uuid")
+            logInfo("$playerName[/$ip] logged in with entity id $entityId at ([world]0.5, 64.0, 0.5)")
+            logInfo("[Server] §a[+] $playerName joined the game")
+
+            val existing = _onlinePlayers.value.find { it.name.equals(playerName, ignoreCase = true) }
+            if (existing == null) {
+                val newPlayer = LivePlayer(
+                    name = playerName,
+                    uuid = uuid.toString(),
+                    pingMs = Random.nextInt(18, 48),
+                    x = 0.5,
+                    y = 64.0,
+                    z = 0.5,
+                    dimension = "minecraft:overworld",
+                    gamemode = "SURVIVAL",
+                    health = 20f,
+                    food = 20,
+                    isOp = false
+                )
+                _onlinePlayers.value = _onlinePlayers.value + newPlayer
+            }
+            _metrics.value = _metrics.value.copy(
+                onlinePlayers = _onlinePlayers.value.size
+            )
+        }
     }
 
     private fun startTickLoop() {
@@ -249,6 +442,10 @@ class ServerEngine(private val context: Context) {
             logInfo("Stopping server...")
 
             // Kick online players
+            for (session in activeSessions) {
+                session.kick("Server closed")
+            }
+            activeSessions.clear()
             if (_onlinePlayers.value.isNotEmpty()) {
                 logInfo("Kicking all players: Server closed")
                 _onlinePlayers.value = emptyList()
@@ -289,13 +486,26 @@ class ServerEngine(private val context: Context) {
             logInfo("PaperMC server closed cleanly. Goodbye!")
 
             _status.value = ServerStatus.STOPPED
+            _runningServerId.value = null
+            _runningServer.value = null
             _metrics.value = ServerMetrics(onlinePlayers = 0, uptimeSeconds = 0)
+        }
+    }
+
+    suspend fun stopServerAwait() {
+        if (_status.value == ServerStatus.STOPPED) return
+        stopServer()
+        var wait = 0
+        while (_status.value != ServerStatus.STOPPED && wait < 60) {
+            delay(50)
+            wait++
         }
     }
 
     fun updateProfile(profile: ServerProfileEntity) {
         currentProfile = profile
-        logInfo("[server.properties] Applied runtime configuration changes (MOTD: \"${profile.motd}\", Max Players: ${profile.maxPlayers}, Difficulty: ${profile.difficulty.uppercase()})")
+        _runningServer.value = profile
+        logInfo("[server.properties] Applied runtime configuration changes (MOTD: \"${profile.motd}\", Version: \"${profile.minecraftVersion}\", Max Players: ${profile.maxPlayers}, Difficulty: ${profile.difficulty.uppercase()})")
     }
 
     fun restartServer(
@@ -370,7 +580,34 @@ class ServerEngine(private val context: Context) {
                     logWarn("Usage: /say <message ...>")
                 } else {
                     val message = args.joinToString(" ")
-                    logInfo("[Server] $message")
+                    broadcastMessage("§d[Server] $message")
+                }
+            }
+
+            "teleport", "tp" -> {
+                if (args.size >= 4) {
+                    val target = args[0]
+                    val x = args[1].toDoubleOrNull() ?: 0.0
+                    val y = args[2].toDoubleOrNull() ?: 65.0
+                    val z = args[3].toDoubleOrNull() ?: 0.0
+                    val sess = activeSessions.find { it.playerName.equals(target, ignoreCase = true) }
+                    if (sess != null) {
+                        sess.teleport(x, y, z)
+                        logInfo("Teleported $target to $x, $y, $z")
+                    } else {
+                        logWarn("Player $target not found")
+                    }
+                    pojavListener?.onTeleported(x, y, z)
+                } else if (args.size == 3) {
+                    val x = args[0].toDoubleOrNull() ?: 0.0
+                    val y = args[1].toDoubleOrNull() ?: 65.0
+                    val z = args[2].toDoubleOrNull() ?: 0.0
+                    for (sess in activeSessions) {
+                        sess.teleport(x, y, z)
+                    }
+                    logInfo("Teleported all players to $x, $y, $z")
+                } else {
+                    logWarn("Usage: /tp [player] <x> <y> <z>")
                 }
             }
 
@@ -387,6 +624,7 @@ class ServerEngine(private val context: Context) {
                             logInfo("Set the time to $worldTimeTicks")
                         }
                     }
+                    broadcastMessage("§7[Server: Set the time to $worldTimeTicks]")
                 } else {
                     logWarn("Usage: /time set <day|night|noon|midnight|<ticks>>")
                 }
@@ -451,8 +689,20 @@ class ServerEngine(private val context: Context) {
                     logWarn("Usage: /gamemode <gamemode> [player]")
                 } else {
                     val mode = args[0].uppercase(Locale.ROOT)
-                    val target = args.getOrNull(1) ?: "Player"
-                    logInfo("Set $target's game mode to $mode Mode")
+                    val isCreative = mode.contains("CREATIVE") || mode == "1"
+                    val target = args.getOrNull(1)
+                    if (target != null) {
+                        val sess = activeSessions.find { it.playerName.equals(target, ignoreCase = true) }
+                        sess?.setGamemode(isCreative)
+                        pojavListener?.onGamemodeChanged(mode)
+                        logInfo("Set $target's game mode to $mode Mode")
+                    } else {
+                        for (sess in activeSessions) {
+                            sess.setGamemode(isCreative)
+                        }
+                        pojavListener?.onGamemodeChanged(mode)
+                        logInfo("Set game mode to $mode Mode for all players")
+                    }
                 }
             }
 
@@ -462,6 +712,8 @@ class ServerEngine(private val context: Context) {
                 } else {
                     val target = args[0]
                     val reason = if (args.size > 1) args.drop(1).joinToString(" ") else "Kicked by an operator."
+                    val sess = activeSessions.find { it.playerName.equals(target, ignoreCase = true) }
+                    sess?.kick(reason)
                     removeOnlinePlayer(target)
                     logInfo("Kicked $target: $reason")
                 }

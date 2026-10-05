@@ -40,4 +40,10 @@ interface ServerDao {
 
     @Query("UPDATE server_profiles SET isDefault = 1 WHERE id = :id")
     suspend fun setDefaultServer(id: Long)
+
+    @Query("DELETE FROM server_profiles WHERE id = :id")
+    suspend fun deleteServerById(id: Long)
+
+    @Query("UPDATE server_profiles SET customServerDirectory = :dir WHERE id = :id")
+    suspend fun updateServerDirectory(id: Long, dir: String?)
 }

@@ -28,4 +28,7 @@ interface PluginDao {
 
     @Query("UPDATE installed_plugins SET isEnabled = :enabled WHERE id = :id")
     suspend fun setPluginEnabled(id: Long, enabled: Boolean)
+
+    @Query("DELETE FROM installed_plugins WHERE serverId = :serverId")
+    suspend fun deleteAllPluginsForServer(serverId: Long)
 }

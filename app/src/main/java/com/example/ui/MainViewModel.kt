@@ -13,6 +13,9 @@ import com.example.data.remote.ModrinthProjectHit
 import com.example.server.ConsoleMessage
 import com.example.server.LivePlayer
 import com.example.server.LogLevel
+import com.example.server.PojavChatMessage
+import com.example.server.PojavClientState
+import com.example.server.PojavSessionListener
 import com.example.server.ServerMetrics
 import com.example.server.ServerStatus
 import com.example.service.PaperServerService
@@ -20,11 +23,13 @@ import com.example.utils.ImportServerOptions
 import com.example.utils.ServerPropertiesDocument
 import com.example.utils.ZipAnalysisResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -41,6 +46,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val metrics: StateFlow<ServerMetrics> = engine.metrics
     val logs: StateFlow<List<ConsoleMessage>> = engine.logs
     val onlinePlayers: StateFlow<List<LivePlayer>> = engine.onlinePlayers
+    val runningServerId: StateFlow<Long?> = engine.runningServerId
+    val runningServer: StateFlow<ServerProfileEntity?> = engine.runningServer
 
     val allServers: StateFlow<List<ServerProfileEntity>> = repo.allServers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -123,6 +130,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isSavingProperties: StateFlow<Boolean> = _isSavingProperties.asStateFlow()
 
     init {
+        com.example.server.PlayitTunnelManager.init(getApplication())
         viewModelScope.launch {
             _deviceIp.value = repo.getDeviceIpAddress()
             fetchRemotePaperVersions()
@@ -147,15 +155,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectServer(id: Long) {
         _selectedServerId.value = id
+        viewModelScope.launch {
+            repo.setDefaultServer(id)
+        }
     }
 
-    fun startServer() {
-        val server = currentServer.value ?: return
-        val plugins = currentPlugins.value
-        val players = currentPlayers.value
+    fun startServer(targetServerId: Long? = null) {
+        viewModelScope.launch {
+            val serverId = targetServerId ?: currentServer.value?.id ?: _selectedServerId.value ?: return@launch
+            val server = repo.getServerById(serverId)
+                ?: allServers.value.firstOrNull { it.id == serverId }
+                ?: currentServer.value ?: return@launch
 
-        PaperServerService.startService(getApplication())
-        engine.startServer(server, plugins, players)
+            // If another server was running or stopping, cleanly wait for it to fully stop first
+            if (engine.status.value != ServerStatus.STOPPED) {
+                if (engine.runningServerId.value != server.id) {
+                    engine.stopServerAwait()
+                } else {
+                    return@launch
+                }
+            }
+
+            _selectedServerId.value = server.id
+            repo.setDefaultServer(server.id)
+
+            val plugins = repo.getPlugins(server.id)
+            val players = repo.getPlayers(server.id)
+
+            PaperServerService.startService(getApplication())
+            engine.startServer(server, plugins, players)
+        }
     }
 
     fun stopServer() {
@@ -163,10 +192,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun restartServer() {
-        val server = currentServer.value ?: return
-        val plugins = currentPlugins.value
-        val players = currentPlayers.value
-        engine.restartServer(server, plugins, players)
+        viewModelScope.launch {
+            val server = currentServer.value ?: return@launch
+            val plugins = repo.getPlugins(server.id)
+            val players = repo.getPlayers(server.id)
+            engine.restartServer(server, plugins, players)
+        }
     }
 
     fun sendCommand(cmd: String) {
@@ -186,6 +217,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateServerConfig(updated: ServerProfileEntity) {
         viewModelScope.launch {
             repo.saveServer(updated)
+            if (engine.status.value != ServerStatus.STOPPED && (engine.runningServerId.value == updated.id || currentServer.value?.id == updated.id)) {
+                engine.updateProfile(updated)
+            }
+        }
+    }
+
+    fun updateServerMinecraftVersion(newVersion: String) {
+        val server = currentServer.value ?: return
+        val clean = newVersion.trim()
+        if (clean.isBlank()) return
+        val updated = server.copy(minecraftVersion = clean)
+        viewModelScope.launch {
+            repo.saveServer(updated)
+            if (engine.status.value != ServerStatus.STOPPED && (engine.runningServerId.value == updated.id || currentServer.value?.id == updated.id)) {
+                engine.updateProfile(updated)
+            }
+        }
+    }
+
+    fun updateServerDirectory(newPath: String) {
+        val server = currentServer.value ?: return
+        viewModelScope.launch {
+            val finalPath = newPath.trim().ifBlank { null }
+            repo.updateServerDirectory(server.id, finalPath)
         }
     }
 
@@ -210,19 +265,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 allocatedRamMb = ramMb,
                 createdAt = System.currentTimeMillis()
             )
-            repo.saveServer(newProfile)
+            val newId = repo.saveServer(newProfile)
+            if (newId > 0) {
+                _selectedServerId.value = newId
+                repo.setDefaultServer(newId)
+            }
+        }
+    }
+
+    fun deleteServer(serverId: Long) {
+        viewModelScope.launch {
+            if (engine.runningServerId.value == serverId) {
+                engine.stopServerAwait()
+            }
+            repo.deleteServerById(serverId)
+            val remaining = repo.allServers.first()
+            if (remaining.isNotEmpty()) {
+                val next = remaining.first()
+                _selectedServerId.value = next.id
+                repo.setDefaultServer(next.id)
+            } else {
+                val defaultServer = ServerProfileEntity(
+                    name = "Paper Server",
+                    minecraftVersion = "1.21.1",
+                    isDefault = true
+                )
+                val newId = repo.saveServer(defaultServer)
+                _selectedServerId.value = newId
+            }
         }
     }
 
     fun deleteCurrentServer() {
         val server = currentServer.value ?: return
-        viewModelScope.launch {
-            if (serverStatus.value == ServerStatus.RUNNING) {
-                stopServer()
-            }
-            repo.deleteServer(server)
-            _selectedServerId.value = null
-        }
+        deleteServer(server.id)
     }
 
     fun togglePlugin(plugin: InstalledPluginEntity) {
@@ -367,6 +443,172 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         engine.simulatePlayerJoin(name)
     }
 
+    // Pojav Java 1.21.1 Test Client Simulation
+    private val _pojavState = MutableStateFlow(PojavClientState())
+    val pojavState: StateFlow<PojavClientState> = _pojavState.asStateFlow()
+
+    private val pojavListener = object : PojavSessionListener {
+        override fun onServerMessage(message: String) {
+            val sender = if (message.startsWith("<") && message.contains(">")) {
+                message.substringAfter("<").substringBefore(">")
+            } else if (message.startsWith("§d[Server]")) {
+                "Server"
+            } else {
+                "System"
+            }
+            val chat = PojavChatMessage(
+                sender = sender,
+                text = message,
+                isSystem = !message.startsWith("<")
+            )
+            _pojavState.value = _pojavState.value.copy(
+                chatMessages = (_pojavState.value.chatMessages + chat).takeLast(60)
+            )
+        }
+
+        override fun onGamemodeChanged(newGamemode: String) {
+            _pojavState.value = _pojavState.value.copy(gamemode = newGamemode.uppercase())
+        }
+
+        override fun onTeleported(x: Double, y: Double, z: Double) {
+            _pojavState.value = _pojavState.value.copy(posX = x, posY = y, posZ = z)
+        }
+    }
+
+    fun launchPojavClient(connectToServer: Boolean) {
+        val current = _pojavState.value
+        _pojavState.value = current.copy(
+            isRunning = true,
+            isConnectedToServer = connectToServer
+        )
+        if (connectToServer) {
+            if (engine.status.value != ServerStatus.RUNNING) {
+                startServer()
+            }
+            engine.registerPojavSession(
+                name = current.username,
+                initialX = current.posX,
+                initialY = current.posY,
+                initialZ = current.posZ,
+                listener = pojavListener
+            )
+        }
+    }
+
+    fun stopPojavClient() {
+        val current = _pojavState.value
+        if (current.isConnectedToServer) {
+            engine.unregisterPojavSession(current.username)
+        }
+        _pojavState.value = current.copy(
+            isRunning = false,
+            isConnectedToServer = false,
+            isChatOpen = false,
+            isInventoryOpen = false,
+            isSettingsOpen = false
+        )
+    }
+
+    fun togglePojavServerConnection() {
+        val current = _pojavState.value
+        if (current.isConnectedToServer) {
+            engine.unregisterPojavSession(current.username)
+            _pojavState.value = current.copy(isConnectedToServer = false)
+        } else {
+            if (engine.status.value != ServerStatus.RUNNING) {
+                startServer()
+            }
+            engine.registerPojavSession(
+                name = current.username,
+                initialX = current.posX,
+                initialY = current.posY,
+                initialZ = current.posZ,
+                listener = pojavListener
+            )
+            _pojavState.value = current.copy(isConnectedToServer = true)
+        }
+    }
+
+    fun togglePojavF3() {
+        _pojavState.value = _pojavState.value.copy(isF3Open = !_pojavState.value.isF3Open)
+    }
+
+    fun togglePojavChat() {
+        _pojavState.value = _pojavState.value.copy(isChatOpen = !_pojavState.value.isChatOpen)
+    }
+
+    fun togglePojavInventory() {
+        _pojavState.value = _pojavState.value.copy(isInventoryOpen = !_pojavState.value.isInventoryOpen)
+    }
+
+    fun togglePojavSettings() {
+        _pojavState.value = _pojavState.value.copy(isSettingsOpen = !_pojavState.value.isSettingsOpen)
+    }
+
+    fun selectPojavHotbarSlot(slot: Int) {
+        _pojavState.value = _pojavState.value.copy(selectedHotbarSlot = slot.coerceIn(0, 8))
+    }
+
+    fun sendPojavChatMessage(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val current = _pojavState.value
+
+        val newMsg = PojavChatMessage(
+            sender = current.username,
+            text = trimmed,
+            isSystem = false
+        )
+        _pojavState.value = current.copy(
+            chatMessages = (current.chatMessages + newMsg).takeLast(60)
+        )
+
+        if (current.isConnectedToServer) {
+            if (trimmed.startsWith("/")) {
+                engine.executeCommand(trimmed.substring(1))
+            } else {
+                engine.broadcastPlayerChat(current.username, trimmed)
+            }
+        }
+    }
+
+    fun updatePojavPosition(x: Double, y: Double, z: Double, yaw: Float, pitch: Float) {
+        val current = _pojavState.value
+        _pojavState.value = current.copy(
+            posX = x,
+            posY = y,
+            posZ = z,
+            yaw = yaw,
+            pitch = pitch
+        )
+        if (current.isConnectedToServer) {
+            engine.updatePlayerPosition(current.username, x, y, z, yaw, pitch)
+        }
+    }
+
+    fun updatePojavSettings(version: String, ramMb: Int, renderer: String, username: String) {
+        val oldUsername = _pojavState.value.username
+        val wasConnected = _pojavState.value.isConnectedToServer
+        if (wasConnected && oldUsername != username) {
+            engine.unregisterPojavSession(oldUsername)
+        }
+        _pojavState.value = _pojavState.value.copy(
+            minecraftVersion = version,
+            allocatedRamMb = ramMb,
+            renderer = renderer,
+            username = username
+        )
+        if (wasConnected && oldUsername != username) {
+            engine.registerPojavSession(
+                name = username,
+                initialX = _pojavState.value.posX,
+                initialY = _pojavState.value.posY,
+                initialZ = _pojavState.value.posZ,
+                listener = pojavListener
+            )
+        }
+    }
+
     fun getTermuxScript(): String {
         val server = currentServer.value ?: return ""
         return engine.generateTermuxScript(server)
@@ -445,6 +687,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 _isLoadingProperties.value = false
+            }
+        }
+    }
+
+    // Playit.gg Tunnel State
+    val playitTunnelInfo = com.example.server.PlayitTunnelManager.tunnelInfo
+    val playitTunnelLogs = com.example.server.PlayitTunnelManager.tunnelLogs
+
+    private val _hostTestResult = MutableStateFlow<com.example.server.HostResolutionResult?>(null)
+    val hostTestResult: StateFlow<com.example.server.HostResolutionResult?> = _hostTestResult.asStateFlow()
+
+    private val _isTestingHost = MutableStateFlow(false)
+    val isTestingHost: StateFlow<Boolean> = _isTestingHost.asStateFlow()
+
+    fun testHost(address: String) {
+        viewModelScope.launch {
+            _isTestingHost.value = true
+            _hostTestResult.value = com.example.server.PlayitTunnelManager.testHostResolution(address)
+            _isTestingHost.value = false
+        }
+    }
+
+    fun clearHostTestResult() {
+        _hostTestResult.value = null
+    }
+
+    fun togglePlayitTunnel(enabled: Boolean, customSubdomain: String? = null) {
+        val port = currentServer.value?.port ?: 25565
+        if (enabled) {
+            com.example.server.PlayitTunnelManager.startTunnel(port, customSubdomain)
+        } else {
+            com.example.server.PlayitTunnelManager.stopTunnel()
+        }
+    }
+
+    fun updatePlayitPublicAddress(address: String) {
+        com.example.server.PlayitTunnelManager.updatePublicAddress(address)
+    }
+
+    fun generateNewPlayitClaimLink() {
+        com.example.server.PlayitTunnelManager.generateNewClaimLink()
+    }
+
+    fun fixPlayitVersionTooOld() {
+        com.example.server.PlayitTunnelManager.fixVersionTooOldAndRegenerate()
+    }
+
+    fun savePlayitSecretKey(secretKey: String) {
+        com.example.server.PlayitTunnelManager.saveSecretKey(secretKey)
+    }
+
+    fun installPlayitPlugin(onComplete: (Boolean) -> Unit = {}) {
+        val server = currentServer.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val effectiveDir = server.getEffectiveDirectory(getApplication())
+            val success = com.example.server.PlayitTunnelManager.installPlayitPlugin(effectiveDir)
+            withContext(Dispatchers.Main) {
+                onComplete(success)
             }
         }
     }
